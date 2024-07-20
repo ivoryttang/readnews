@@ -1,3 +1,4 @@
+export {}
 import type { PlasmoCSConfig } from "plasmo"
  
 export const config: PlasmoCSConfig = {
@@ -300,7 +301,7 @@ async function speakText(firstTextNode) {
 }
 
 //controls play and pause of speaker
-function speaker(){
+export function speaker(){
   let firstTextNode = document.body.innerText.trim().split(/\s+/).slice(0, 30).join(" ");
   speakText(firstTextNode);
 }
@@ -595,16 +596,15 @@ function injectCSS() {
   document.head.appendChild(style);
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  console.log("listener triggered")
-  if (request.action === "play") {
-    speaker(); // Call the speaker function
-    sendResponse({ status: "processed" }); // Send a response back to the message sender
-  }
-});
+// chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+//   console.log("listener triggered")
+//   if (request.action === "play") {
+//     speaker(); // Call the speaker function
+//     sendResponse({ status: "processed" }); // Send a response back to the message sender
+//   }
+// });
 
 
 console.log("Content script loaded");
-chrome.runtime.sendMessage({ action: "contentScriptReady" });
 
 

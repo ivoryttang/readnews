@@ -1,3 +1,4 @@
+export {}
 // let contentScriptReady = false;
 
 // chrome.runtime.onMessage.addListener((message, sender) => {
@@ -41,21 +42,31 @@
 //   });
 // }
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Extension installed');
-});
-
+// background.ts
 chrome.action.onClicked.addListener((tab) => {
-  // Make sure the tab.id is valid before sending the message
   if (tab.id) {
-    chrome.tabs.sendMessage(tab.id, { action: "play" }, (response) => {
-      if (chrome.runtime.lastError) {
-        // Handle any errors that might have occurred
-        console.error("Error sending message:", chrome.runtime.lastError.message);
-      } else {
-        // Handle the response from the content script
-        console.log(response.status);
+    // First, inject the content script
+    chrome.scripting.executeScript(
+      {
+        target: { tabId: tab.id },
+        files: ['content.js'], // Plasmo will compile your content.ts to content.js
+      },
+      () => {
+        // After the content script is injected, execute the function
+        chrome.scripting.executeScript(
+          {
+            target: { tabId: tab.id },
+            world: "MAIN",
+            func: () => {
+              // @ts-ignore
+              speaker()
+            }
+          },
+          () => {
+            console.log("Function executed");
+          }
+        );
       }
-    });
+    );
   }
 });
