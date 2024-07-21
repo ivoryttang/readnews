@@ -34,11 +34,17 @@ class StreamingAudioPlayer {
   bufferFillAmount: number;
   remainder: Uint8Array;
   nextStartTime: number;
+  startTime: number | null;
+  onPlaybackStart: () => void;
+  onPlaybackPause: () => void;
+  onPlaybackEnd: () => void;
+  onTimeUpdate: (currentTime: number, duration: number) => void;
 
   constructor(audioContext: AudioContext, onProgress: (time: number) => void) {
     this.audioContext = audioContext;
     this.onProgress = onProgress;
     this.bufferQueue = [];
+    this.startTime = null; 
     this.isPlaying = false;
     this.sampleRate = 44100;
     this.channelCount = 1;
@@ -47,6 +53,10 @@ class StreamingAudioPlayer {
     this.bufferFillAmount = 0;
     this.remainder = new Uint8Array(0);
     this.nextStartTime = 0;
+    this.onPlaybackStart = () => {};
+    this.onPlaybackPause = () => {};
+    this.onPlaybackEnd = () => {};
+    this.onTimeUpdate = () => {};
   }
 
   async addChunk(chunk: Uint8Array) {
@@ -90,6 +100,7 @@ class StreamingAudioPlayer {
       0
     );
 
+    
     // Call the onProgress callback with the current playback position
     if (this.onProgress) {
       this.onProgress(this.nextStartTime);
@@ -100,12 +111,53 @@ class StreamingAudioPlayer {
     source.connect(this.audioContext.destination);
 
     if (this.isPlaying) {
+      this.startTime = this.nextStartTime; // Store the start time
+      source.start(this.nextStartTime);
+      this.nextStartTime += audioBuffer.duration;
+    } else {
+      this.startTime = this.audioContext.currentTime; // Store the start time
+      source.start(0);
+      this.nextStartTime = this.startTime + audioBuffer.duration;
+      this.isPlaying = true;
+    }
+
+    // Call onTimeUpdate every 100ms during playback
+    const updateInterval = setInterval(() => {
+      if (this.isPlaying && this.startTime !== null) {
+        const currentTime = this.audioContext.currentTime - this.startTime;
+        this.onTimeUpdate(currentTime, this.nextStartTime);
+      } else {
+        clearInterval(updateInterval);
+      }
+    }, 100);
+
+  source.onended = () => {
+    clearInterval(updateInterval);
+    if (this.bufferQueue.length === 0 && this.bufferFillAmount === 0) {
+      this.isPlaying = false;
+      this.onPlaybackEnd();
+    }
+  };
+
+    if (this.isPlaying) {
       source.start(this.nextStartTime);
       this.nextStartTime += audioBuffer.duration;
     } else {
       source.start(0);
       this.nextStartTime = this.audioContext.currentTime + audioBuffer.duration;
       this.isPlaying = true;
+    }
+  }
+
+  togglePlay() {
+    if (this.isPlaying) {
+      this.audioContext.suspend();
+      this.isPlaying = false;
+      this.onPlaybackPause();
+    } else {
+      this.audioContext.resume();
+      this.isPlaying = true;
+      this.onPlaybackStart();
     }
   }
 
@@ -129,6 +181,7 @@ class StreamingAudioPlayer {
 }
 
 class AudioPlayer {
+  streamingPlayer: StreamingAudioPlayer;
   player: HTMLElement;
   audio: HTMLAudioElement;
   progress: HTMLElement;
@@ -142,6 +195,7 @@ class AudioPlayer {
   constructor(player: HTMLElement) {
     this.player = player;
     this.audio = new Audio();
+    this.streamingPlayer = null;
     this.progress = player.querySelector('.progress') as HTMLElement;
     this.currentTime = player.querySelector('.current') as HTMLElement;
     this.totalTime = player.querySelector('.length') as HTMLElement;
@@ -160,18 +214,46 @@ class AudioPlayer {
     this.volumeBtn.addEventListener('click', () => this.toggleMute());
     this.volumeSlider.addEventListener('click', (e) => this.changeVolume(e));
   }
-  
-  togglePlay(): void {
-    if (this.audio.paused) {
-      this.audio.play();
+
+  setStreamingPlayer(streamingPlayer: StreamingAudioPlayer) {
+    this.streamingPlayer = streamingPlayer;
+    this.streamingPlayer.onPlaybackStart = () => {
       this.playBtn.classList.remove('play');
       this.playBtn.classList.add('pause');
-    } else {
-      this.audio.pause();
+    };
+    this.streamingPlayer.onPlaybackPause = () => {
       this.playBtn.classList.remove('pause');
       this.playBtn.classList.add('play');
+    };
+    this.streamingPlayer.onPlaybackEnd = () => {
+      this.playBtn.classList.remove('pause');
+      this.playBtn.classList.add('play');
+    };
+    this.streamingPlayer.onTimeUpdate = (currentTime, duration) => {
+      const percent = (currentTime / duration) * 100;
+      this.progress.style.width = `${percent}%`;
+      this.currentTime.textContent = this.formatTime(currentTime);
+      this.totalTime.textContent = this.formatTime(duration);
+    };
+  }
+
+  togglePlay(): void {
+    if (this.streamingPlayer) {
+      this.streamingPlayer.togglePlay();
     }
   }
+  
+  // togglePlay(): void {
+  //   if (this.audio.paused) {
+  //     this.audio.play();
+  //     this.playBtn.classList.remove('play');
+  //     this.playBtn.classList.add('pause');
+  //   } else {
+  //     this.audio.pause();
+  //     this.playBtn.classList.remove('pause');
+  //     this.playBtn.classList.add('play');
+  //   }
+  // }
 
   updateProgress(): void {
     const percent = (this.audio.currentTime / this.audio.duration) * 100;
@@ -290,49 +372,33 @@ async function speakText() {
   }
   
   if (document.readyState === "loading") {
-    // The document is still loading, we can use the DOMContentLoaded event
     document.addEventListener('DOMContentLoaded', injectCSS);
   } else {
-    // The DOMContentLoaded event has already fired, call the function directly
     injectCSS();
   }
   
   const audioPlayer = new AudioPlayer(audioPlayerElement);
 
-  const startTime = Date.now();
-  let firstChunkReceived = false;
-
-  const allText = getMainBodyText()
-
-    console.log(allText)
+  const allText = getMainBodyText();
+  console.log(allText);
     
-    if (!audioPlayer.audio.paused){ // only call tts api when play button clicked
-      const response = await fetchTTSData(allText)
+  const response = await fetchTTSData(allText);
+  const reader = response.body.getReader();
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-      const reader = response.body.getReader();
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
+    // Update the highlight based on the currentPosition
+  });
 
-      const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
-        // Update the highlight based on the currentPosition
-        // This is a placeholder; you will need to implement logic to determine which part of the text corresponds to the current position
-      });
+  audioPlayer.setStreamingPlayer(streamingAudioPlayer);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    await streamingAudioPlayer.addChunk(value);
+  }
 
-        if (!firstChunkReceived) {
-          firstChunkReceived = true;
-          const timeToFirstChunk = Date.now() - startTime;
-          console.log(`Time to first chunk: ${timeToFirstChunk}ms`);
-        }
-
-        await streamingAudioPlayer.addChunk(value);
-      }
-
-      await streamingAudioPlayer.finish();
-    }
-  
+  await streamingAudioPlayer.finish();
 }
 
 
