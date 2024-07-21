@@ -30,20 +30,6 @@ function parseMarkdown(text) {
     .replace(/\n/g, "<br>");
 }
 
-function findFirstTextNode(element) {
-  if (
-    element.nodeType === Node.TEXT_NODE &&
-    element.textContent.trim() !== ""
-  ) {
-    return element;
-  }
-  for (let child of element.childNodes) {
-    const textNode = findFirstTextNode(child);
-    if (textNode) return textNode;
-  }
-  return null;
-}
-
 // StreamingAudioPlayer class
 class StreamingAudioPlayer {
   audioContext: AudioContext;
@@ -230,7 +216,7 @@ class AudioPlayer {
 }
 
 // Text to Speech function
-async function speakText(firstTextNode) {
+async function speakText() {
   const audioPlayerElement = createAudioPlayer() as HTMLElement;
   document.body.appendChild(audioPlayerElement);
   
@@ -300,11 +286,6 @@ async function speakText(firstTextNode) {
   // } 
 }
 
-//controls play and pause of speaker
-export function speaker(){
-  let firstTextNode = document.body.innerText.trim().split(/\s+/).slice(0, 30).join(" ");
-  speakText(firstTextNode);
-}
 
 function createAudioPlayer() {
   const playerHTML = `
@@ -596,15 +577,7 @@ function injectCSS() {
   document.head.appendChild(style);
 }
 
-// chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-//   console.log("listener triggered")
-//   if (request.action === "play") {
-//     speaker(); // Call the speaker function
-//     sendResponse({ status: "processed" }); // Send a response back to the message sender
-//   }
-// });
-
-
+speakText();
 console.log("Content script loaded");
 
 
