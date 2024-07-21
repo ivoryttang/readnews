@@ -17,7 +17,7 @@ const CONFIG = {
   API_KEY: "", // Get an API key from https://cartesia.ai/
   API_VERSION: "2024-06-10",
   API_URL: "https://api.cartesia.ai/tts/bytes",
-  VOICE_ID: "c45bc5ec-dc68-4feb-8829-6e6b2748095d",
+  VOICE_ID: "41534e16-2966-4c6b-9670-111411def906",
   MODEL_ID: "sonic-english",
 };
 
@@ -112,11 +112,9 @@ class StreamingAudioPlayer {
 
     if (this.isPlaying) {
       this.startTime = this.nextStartTime; // Store the start time
-      source.start(this.nextStartTime);
       this.nextStartTime += audioBuffer.duration;
     } else {
       this.startTime = this.audioContext.currentTime; // Store the start time
-      source.start(0);
       this.nextStartTime = this.startTime + audioBuffer.duration;
       this.isPlaying = true;
     }
@@ -131,13 +129,20 @@ class StreamingAudioPlayer {
       }
     }, 100);
 
-  source.onended = () => {
-    clearInterval(updateInterval);
-    if (this.bufferQueue.length === 0 && this.bufferFillAmount === 0) {
-      this.isPlaying = false;
-      this.onPlaybackEnd();
+    source.onended = () => {
+      clearInterval(updateInterval);
+      if (this.bufferQueue.length === 0 && this.bufferFillAmount === 0) {
+        this.isPlaying = false;
+        this.onPlaybackEnd();
+      }
+    };
+
+    if (!this.isPlaying) {
+      this.startTime = this.audioContext.currentTime; // Store the start time
+      this.nextStartTime = this.startTime + audioBuffer.duration;
+      this.isPlaying = true;
+      source.start(this.startTime); // Start the source
     }
-  };
 
     if (this.isPlaying) {
       source.start(this.nextStartTime);
@@ -213,6 +218,28 @@ class AudioPlayer {
     this.audio.addEventListener('loadeddata', () => this.setTotalTime());
     this.volumeBtn.addEventListener('click', () => this.toggleMute());
     this.volumeSlider.addEventListener('click', (e) => this.changeVolume(e));
+    const selectElement = this.player.querySelector('.audio-options') as HTMLSelectElement;
+    selectElement.addEventListener('change', (e) => this.changeVoice(e));
+  }
+
+  changeVoice(e: Event): void {
+    const selectElement = e.target as HTMLSelectElement;
+    const selectedValue = selectElement.value;
+    const randomIndex = Math.floor(Math.random() * 5);
+    const voiceIds = ["b7d50908-b17c-442d-ad8d-810c63997ed9", "2ee87190-8f84-4925-97da-e52547f9462c", "fb26447f-308b-471e-8b00-8e9f04284eb5","e00d0e4c-a5c8-443f-a8a3-473eb9a62355","638efaaa-4d0c-442e-b701-3fae16aad012"]
+    switch (selectedValue) {
+      case "woman":
+        CONFIG.VOICE_ID = "79a125e8-cd45-4c13-8a67-188112f4dd22";
+        break;
+      case "man":
+        CONFIG.VOICE_ID = "41534e16-2966-4c6b-9670-111411def906";
+        break;
+      case "other":
+        CONFIG.VOICE_ID = voiceIds[randomIndex];;
+        break;
+      default:
+        CONFIG.VOICE_ID = "default-voice-id";
+    }
   }
 
   setStreamingPlayer(streamingPlayer: StreamingAudioPlayer) {
@@ -319,19 +346,37 @@ async function fetchTTSData(text: string) {
   return response;
 }
 
+
 //parsing function
 function getMainBodyText() {
   // List of tags to ignore
   const ignoreTags = ['script', 'style', 'noscript', 'header', 'footer', 'nav', 'aside'];
+
+  const shouldIgnoreElement = (element: Element): boolean => {
+    const ignoreClasses = ['audio-player', 'button', 'control', 'input', 'main-menu','footer-wrap','comments-section','single-post-section','share-dialog']; // Add more classes as needed
+    return ignoreClasses.some(className => hasClassInTree(element, className));
+  };
   
   // Function to check if an element is visible
   const isVisible = (element) => {
       return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
   };
 
+  const hasClassInTree = (element: Element, className: string): boolean => {
+    while (element) {
+      if (element.classList && element.classList.contains(className)) {
+        return true;
+      }
+      element = element.parentElement;
+    }
+    return false;
+  };
   // Function to get text from an element
   const getText = (element: Node): string => { // Edit: Added type annotation for 'element'
     if (ignoreTags.includes(element.nodeName.toLowerCase())) return '';
+    if (element.nodeType === Node.ELEMENT_NODE && shouldIgnoreElement(element as Element)) {
+      return ''; // Ignore text within elements with specific classes
+    }
     
     if (element.childNodes.length === 0) return element.textContent?.trim() || ''; // Edit: Added optional chaining
     
@@ -384,13 +429,19 @@ async function speakText() {
     
   const response = await fetchTTSData(allText);
   const reader = response.body.getReader();
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-  const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
-    // Update the highlight based on the currentPosition
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, () => {
+    audioPlayer.updateProgress();
   });
 
   audioPlayer.setStreamingPlayer(streamingAudioPlayer);
+
+  document.body.addEventListener('click', () => {
+    if (audioContext.state === 'suspended') {
+      audioContext.resume();
+    }
+  }, { once: true }); 
 
   while (true) {
     const { done, value } = await reader.read();
