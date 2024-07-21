@@ -21,15 +21,6 @@ const CONFIG = {
   MODEL_ID: "sonic-english",
 };
 
-// Utility functions
-function parseMarkdown(text) {
-  return text
-    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.*?)\*/g, "<em>$1</em>")
-    .replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2">$1</a>')
-    .replace(/\n/g, "<br>");
-}
-
 // StreamingAudioPlayer class
 class StreamingAudioPlayer {
   audioContext: AudioContext;
@@ -169,7 +160,7 @@ class AudioPlayer {
     this.volumeBtn.addEventListener('click', () => this.toggleMute());
     this.volumeSlider.addEventListener('click', (e) => this.changeVolume(e));
   }
-
+  
   togglePlay(): void {
     if (this.audio.paused) {
       this.audio.play();
@@ -215,6 +206,80 @@ class AudioPlayer {
   }
 }
 
+async function fetchTTSData(text: string) {
+  const options = {
+    method: "POST",
+    headers: {
+      "X-API-Key": CONFIG.API_KEY,
+      "Cartesia-Version": CONFIG.API_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      output_format: {
+        container: "raw",
+        sample_rate: 44100,
+        encoding: "pcm_f32le",
+      },
+      language: "en",
+      voice: {
+        mode: "id",
+        id: CONFIG.VOICE_ID,
+      },
+      model_id: CONFIG.MODEL_ID,
+      transcript: text,
+    })
+  };
+
+  const response = await fetch(CONFIG.API_URL, options);
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+  return response;
+}
+
+//parsing function
+function getMainBodyText() {
+  // List of tags to ignore
+  const ignoreTags = ['script', 'style', 'noscript', 'header', 'footer', 'nav', 'aside'];
+  
+  // Function to check if an element is visible
+  const isVisible = (element) => {
+      return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+  };
+
+  // Function to get text from an element
+  const getText = (element: Node): string => { // Edit: Added type annotation for 'element'
+    if (ignoreTags.includes(element.nodeName.toLowerCase())) return '';
+    
+    if (element.childNodes.length === 0) return element.textContent?.trim() || ''; // Edit: Added optional chaining
+    
+    return Array.from(element.childNodes)
+        .map((child: Node) => { // Edit: Added type annotation for 'child'
+            if (child.nodeType === Node.TEXT_NODE) return child.textContent?.trim() || ''; // Edit: Added optional chaining
+            if (child.nodeType === Node.ELEMENT_NODE) return getText(child as Element); // Edit: Type cast 'child' to 'Element'
+            return '';
+        })
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+};
+
+  // Main content selectors to try
+  const mainSelectors = ['main', 'article', '#content', '.content', '#main', '.main'];
+  
+  let mainContent = null;
+  for (let selector of mainSelectors) {
+      mainContent = document.querySelector(selector);
+      if (mainContent && isVisible(mainContent)) break;
+  }
+
+  // If no main content found, fall back to body
+  if (!mainContent) mainContent = document.body;
+
+  // Get text from main content
+  return getText(mainContent);
+}
+
 // Text to Speech function
 async function speakText() {
   const audioPlayerElement = createAudioPlayer() as HTMLElement;
@@ -237,61 +302,37 @@ async function speakText() {
   const startTime = Date.now();
   let firstChunkReceived = false;
 
-  const options = {
-    method: "POST",
-    headers: {
-      "X-API-Key": CONFIG.API_KEY,
-      "Cartesia-Version": CONFIG.API_VERSION,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      output_format: {
-        container: "raw",
-        sample_rate: 44100,
-        encoding: "pcm_f32le",
-      },
-      language: "en",
-      voice: {
-        mode: "id",
-        id: CONFIG.VOICE_ID,
-      },
-      model_id: CONFIG.MODEL_ID,
-      transcript: firstTextNode, //start reading whole script from start
-    }),
-  };
+  const allText = getMainBodyText()
 
-  try {
-    const response = await fetch(CONFIG.API_URL, options);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+    console.log(allText)
+    
+    if (!audioPlayer.audio.paused){ // only call tts api when play button clicked
+      const response = await fetchTTSData(allText)
 
-    const reader = response.body.getReader();
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const reader = response.body.getReader();
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-    const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
-      // Update the highlight based on the currentPosition
-      // This is a placeholder; you will need to implement logic to determine which part of the text corresponds to the current position
-    });
+      const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
+        // Update the highlight based on the currentPosition
+        // This is a placeholder; you will need to implement logic to determine which part of the text corresponds to the current position
+      });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      if (!firstChunkReceived) {
-        firstChunkReceived = true;
-        const timeToFirstChunk = Date.now() - startTime;
-        console.log(`Time to first chunk: ${timeToFirstChunk}ms`);
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          const timeToFirstChunk = Date.now() - startTime;
+          console.log(`Time to first chunk: ${timeToFirstChunk}ms`);
+        }
+
+        await streamingAudioPlayer.addChunk(value);
       }
 
-      await streamingAudioPlayer.addChunk(value);
+      await streamingAudioPlayer.finish();
     }
-
-    await streamingAudioPlayer.finish();
-  } catch (error) {
-    console.error("Error fetching or playing audio:", error);
-    alert("Failed to generate or play audio. Please try again.");
-  } 
+  
 }
 
 
