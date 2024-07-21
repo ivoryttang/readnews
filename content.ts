@@ -218,104 +218,122 @@ class AudioPlayer {
 // Text to Speech function
 async function speakText() {
   const audioPlayerElement = createAudioPlayer() as HTMLElement;
-  document.body.appendChild(audioPlayerElement);
+  if (document.body.firstChild) {
+    document.body.insertBefore(audioPlayerElement, document.body.firstChild);
+  } else {
+    document.body.appendChild(audioPlayerElement);
+  }
+  
+  if (document.readyState === "loading") {
+    // The document is still loading, we can use the DOMContentLoaded event
+    document.addEventListener('DOMContentLoaded', injectCSS);
+  } else {
+    // The DOMContentLoaded event has already fired, call the function directly
+    injectCSS();
+  }
   
   const audioPlayer = new AudioPlayer(audioPlayerElement);
-  
-  injectCSS();
 
-  audioPlayer.setAudioSource('https://example.com/audio.mp3')
+  const startTime = Date.now();
+  let firstChunkReceived = false;
 
-  // const startTime = Date.now();
-  // let firstChunkReceived = false;
+  const options = {
+    method: "POST",
+    headers: {
+      "X-API-Key": CONFIG.API_KEY,
+      "Cartesia-Version": CONFIG.API_VERSION,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      output_format: {
+        container: "raw",
+        sample_rate: 44100,
+        encoding: "pcm_f32le",
+      },
+      language: "en",
+      voice: {
+        mode: "id",
+        id: CONFIG.VOICE_ID,
+      },
+      model_id: CONFIG.MODEL_ID,
+      transcript: firstTextNode, //start reading whole script from start
+    }),
+  };
 
-  // const options = {
-  //   method: "POST",
-  //   headers: {
-  //     "X-API-Key": CONFIG.API_KEY,
-  //     "Cartesia-Version": CONFIG.API_VERSION,
-  //     "Content-Type": "application/json",
-  //   },
-  //   body: JSON.stringify({
-  //     output_format: {
-  //       container: "raw",
-  //       sample_rate: 44100,
-  //       encoding: "pcm_f32le",
-  //     },
-  //     language: "en",
-  //     voice: {
-  //       mode: "id",
-  //       id: CONFIG.VOICE_ID,
-  //     },
-  //     model_id: CONFIG.MODEL_ID,
-  //     transcript: firstTextNode, //start reading whole script from start
-  //   }),
-  // };
+  try {
+    const response = await fetch(CONFIG.API_URL, options);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-  // try {
-  //   const response = await fetch(CONFIG.API_URL, options);
-  //   if (!response.ok) {
-  //     throw new Error(`HTTP error! status: ${response.status}`);
-  //   }
+    const reader = response.body.getReader();
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-  //   const reader = response.body.getReader();
-  //   const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
+      // Update the highlight based on the currentPosition
+      // This is a placeholder; you will need to implement logic to determine which part of the text corresponds to the current position
+    });
 
-  //   const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, (currentPosition) => {
-  //     // Update the highlight based on the currentPosition
-  //     // This is a placeholder; you will need to implement logic to determine which part of the text corresponds to the current position
-  //   });
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-  //   while (true) {
-  //     const { done, value } = await reader.read();
-  //     if (done) break;
+      if (!firstChunkReceived) {
+        firstChunkReceived = true;
+        const timeToFirstChunk = Date.now() - startTime;
+        console.log(`Time to first chunk: ${timeToFirstChunk}ms`);
+      }
 
-  //     if (!firstChunkReceived) {
-  //       firstChunkReceived = true;
-  //       const timeToFirstChunk = Date.now() - startTime;
-  //       console.log(`Time to first chunk: ${timeToFirstChunk}ms`);
-  //     }
+      await streamingAudioPlayer.addChunk(value);
+    }
 
-  //     await streamingAudioPlayer.addChunk(value);
-  //   }
-
-  //   await streamingAudioPlayer.finish();
-  // } catch (error) {
-  //   console.error("Error fetching or playing audio:", error);
-  //   alert("Failed to generate or play audio. Please try again.");
-  // } 
+    await streamingAudioPlayer.finish();
+  } catch (error) {
+    console.error("Error fetching or playing audio:", error);
+    alert("Failed to generate or play audio. Please try again.");
+  } 
 }
 
 
 function createAudioPlayer() {
   const playerHTML = `
-    <div class="audio-player">
+  <div class="audio-player">
+    <div class="track-info">
+      <div class="track-details">
+        <div class="track-name">Let's Talk News</div>
+        <div class="artist-name">Listen to your favorite articles!</div>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="play-container">
+        <div class="toggle-play play"></div>
+      </div>
       <div class="timeline">
         <div class="progress"></div>
       </div>
-      <div class="controls">
-        <div class="play-container">
-          <div class="toggle-play play">
-          </div>
-        </div>
-        <div class="time">
-          <div class="current">0:00</div>
-          <div class="divider">/</div>
-          <div class="length"></div>
-        </div>
-        <div class="name">Music Song</div>
-        <div class="volume-container">
-          <div class="volume-button">
-            <div class="volume icono-volumeMedium"></div>
-          </div>
-          
-          <div class="volume-slider">
-            <div class="volume-percentage"></div>
-          </div>
-        </div>
+      <div class="time">
+        <div class="current">0:00</div>
+        <div class="divider">/</div>
+        <div class="length">3:45</div>
       </div>
     </div>
-  `;
+    <div class="audio-controls">
+    <div class="volume-container">
+      <div class="volume-button">
+        <div class="volume icono-volumeMedium"></div>
+      </div>
+      <div class="volume-slider">
+        <div class="volume-percentage"></div>
+      </div>
+    </div>
+    <select class="audio-options">
+      <option value="woman">British Woman</option>
+      <option value="man">American Man</option>
+      <option value="other">Surprise me!</option>
+    </select>
+  </div>
+  </div>
+  `
 
   const playerDiv = document.createElement('div');
   playerDiv.innerHTML = playerHTML;
@@ -323,261 +341,211 @@ function createAudioPlayer() {
 }
 
 function injectCSS() {
+  console.log("Injecting CSS");
   const style = document.createElement('style');
   style.textContent = `
-    .audio-player {
-            *,
-      ::before,
-      ::after {
-        box-sizing: border-box;
-      
-        border-width: 0;
 
-        border-style: solid;
+  .audio-player {
+    width: 300px;
+    background-color: #282828;
+    color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    padding: 20px;
+    position: fixed;
+    left: 75%;
+    top: 50%;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  }
+  
+  /* Track Info */
+  .track-info {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+  }
+  
+  .album-art {
+    width: 50px;
+    height: 50px;
+    border-radius: 4px;
+    margin-right: 15px;
+  }
+  
+  .track-details {
+    display: flex;
+    flex-direction: column;
+  }
+  
+  .track-name {
+    font-size: 16px;
+    font-weight: bold;
+  }
+  
+  .artist-name {
+    font-size: 14px;
+    color: #b3b3b3;
+  }
+  
+  /* Controls */
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 15px;
+  }
+  
+  .play-container {
+    cursor: pointer;
+  }
+  
+  .toggle-play {
+    width: 24px;
+    height: 24px;
+    background: url('play-icon.png') no-repeat center;
+    background-size: contain;
+  }
+  
+  .toggle-play:before {
+    content: '\\25B6'; // Unicode character for a right-pointing triangle (play symbol)
+    font-size: 24px; // Set the size of the icon
+    color: white; // Set the color of the icon
+    line-height: 24px; // Align the icon vertically
+    text-align: center; // Align the icon horizontally
+    display: block;
+  }
 
-        border-color: #e5e7eb;
+  .toggle-play.pause:before {
+    content: '\\23F8'; // Unicode character for a pause symbol
+    font-size: 24px; // Set the size of the icon
+    color: white; // Set the color of the icon
+    line-height: 24px; // Align the icon vertically
+    text-align: center; // Align the icon horizontally
+    display: block;
+  }
+  
+  .timeline {
+    flex: 1;
+    height: 4px;
+    background: #404040;
+    border-radius: 2px;
+    margin: 0 10px;
+    cursor: pointer;
+    position: relative;
+  }
+  
+  .progress {
+    height: 100%;
+    background: #1db954;
+    width: 0;
+    border-radius: 2px;
+  }
+  
+  .time {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+  }
+  
+  .current, .length {
+    font-size: 12px;
+  }
+  
+  .divider {
+    margin: 0 5px;
+  }
+  
+  
 
-      }
+  // Custom arrow for the dropdown
+  .audio-options::-ms-expand {
+    display: none; // Hide the default arrow in IE/Edge
+  }
 
-      ::before,
-      ::after {
-        --tw-content: '';
-      }
-          }
+  .audio-options::after {
+    content: '\\25BC'; // Unicode character for a downward arrow
+    color: #fff; 
+    position: absolute; // Position it absolutely within the parent
+    right: 10px; // Position from the right
+    top: 50%; // Center vertically
+    transform: translateY(-50%); // Adjust vertical position
+    pointer-events: none; // Prevent the arrow from being clickable
+  }
 
-          html {
-            line-height: 1.5;
-            
-            -webkit-text-size-adjust: 100%;
-            
-            -moz-tab-size: 4;
-            
-            -o-tab-size: 4;
-               tab-size: 4;
-            
-            font-family: Inter var, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-            
-          }
+  .audio-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end; /* Aligns items to the right, adjust as needed */
+  }
+  
+  .volume-container {
+    display: flex;
+    align-items: center;
+    margin-right: 10px; /* Space between volume controls and dropdown */
+  }
 
-          body {
-            margin: 0;
-           
-            line-height: inherit;
-            
-          } 
+  // Style to apply when the dropdown is focused
+  .audio-options:focus {
+    outline: none; // Remove the default focus outline
+    border-color: #1db954; // Highlight color when focused
+    color: #fff;
+  }
+  
+  .volume-button {
+    cursor: pointer;
+    margin-right: 5px;
+  }
 
-          hr {
-            height: 0;
-          
-            color: inherit;
-           
-            border-top-width: 1px;
-           
-          }
+  .audio-options {
+    background-color: #FFFFFF;
+    color: #000000 !important; /* Changed to black for visibility on white background */
+    border: 1px solid #606060;
+    border-radius: 4px;
+    padding: 5px 10px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    cursor: pointer;
+  }
 
-          abbr:where([title]) {
-            -webkit-text-decoration: underline dotted;
-                    text-decoration: underline dotted;
-          }
-          h1,
-          h2,
-          h3,
-          h4,
-          h5,
-          h6 {
-            font-size: inherit;
-            font-weight: inherit;
-          }
-
-          a {
-            color: inherit;
-            text-decoration: inherit;
-          }
-
-          b,
-          strong {
-            font-weight: bolder;
-          }
-
-          code,
-          kbd,
-          samp,
-          pre {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            /* 1 */
-            font-size: 1em;
-            /* 2 */
-          }
-
-          small {
-            font-size: 80%;
-          }
-
-          sub,
-          sup {
-            font-size: 75%;
-            line-height: 0;
-            position: relative;
-            vertical-align: baseline;
-          }
-
-          sub {
-            bottom: -0.25em;
-          }
-
-          sup {
-            top: -0.5em;
-          }
-
-          table {
-            text-indent: 0;
-           
-            border-color: inherit;
-           
-            border-collapse: collapse;
-           
-          }
-      
-          button,
-          input,
-          optgroup,
-          select,
-          textarea {
-            font-family: inherit;
-          
-            font-size: 100%;
-           
-            line-height: inherit;
-            
-            color: inherit;
-         
-            margin: 0;
-            
-            padding: 0;
-          
-          }
-
-          button,
-          select {
-            text-transform: none;
-          }
-
-          button,
-          [type='button'],
-          [type='reset'],
-          [type='submit'] {
-            -webkit-appearance: button;
-           
-            background-color: transparent;
-           
-            background-image: none;
-          
-          }
-
-          :-moz-focusring {
-            outline: auto;
-          }
-
-          :-moz-ui-invalid {
-            box-shadow: none;
-          }
-
-          progress {
-            vertical-align: baseline;
-          }
-
-          ::-webkit-inner-spin-button,
-          ::-webkit-outer-spin-button {
-            height: auto;
-          }
-
-          [type='search'] {
-            -webkit-appearance: textfield;
-           
-            outline-offset: -2px;
-            
-          }
-
-          ::-webkit-search-decoration {
-            -webkit-appearance: none;
-          }
-
-          ::-webkit-file-upload-button {
-            -webkit-appearance: button;
-           
-            font: inherit;
-            
-          }
-
-          summary {
-            display: list-item;
-          }
-
-          blockquote,
-          dl,
-          dd,
-          h1,
-          h2,
-          h3,
-          h4,
-          h5,
-          h6,
-          hr,
-          figure,
-          p,
-          pre {
-            margin: 0;
-          }
-
-          fieldset {
-            margin: 0;
-            padding: 0;
-          }
-
-          legend {
-            padding: 0;
-          }
-
-          ol,
-          ul,
-          menu {
-            list-style: none;
-            margin: 0;
-            padding: 0;
-          }
-
-          textarea {
-            resize: vertical;
-          }
-
-          button,
-          [role="button"] {
-            cursor: pointer;
-          }
-
-          :disabled {
-            cursor: default;
-          }
-
-          img,
-          svg,
-          video,
-          canvas,
-          audio,
-          iframe,
-          embed,
-          object {
-            display: block;
-            
-            vertical-align: middle;
-       
-          }
-
-  `;
+  .volume.icono-volumeMedium:before {
+    content: '\\1F509'; // Unicode character for a speaker with one sound wave
+    font-size: 24px; // Set the size of the icon
+    color: white; // Set the color of the icon
+    line-height: 24px; // Align the icon vertically
+    text-align: center; // Align the icon horizontally
+    display: block;
+  }
+  
+  .volume-slider {
+    position: relative;
+    width: 100px;
+    height: 6px;
+    background: #404040;
+    border-radius: 2px;
+    margin-left: 10px;
+    margin-right: 10px;
+    cursor: pointer;
+  }
+  
+  .volume-percentage {
+    position: absolute;
+    height: 100%;
+    background: #1db954;
+    width: 50%;
+    border-radius: 2px;
+  }
+  
+  `
   document.head.appendChild(style);
+  console.log("finish css injection")
 }
 
 speakText();
+
 console.log("Content script loaded");
 
 

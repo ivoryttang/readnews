@@ -1,5 +1,3 @@
-export {}
-
 // background.ts
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id) {
@@ -7,7 +5,7 @@ chrome.action.onClicked.addListener((tab) => {
     chrome.scripting.executeScript(
       {
         target: { tabId: tab.id },
-        files: ['content.js'], // Plasmo will compile your content.ts to content.js
+        files: ['content.ts'], // Plasmo will compile your content.ts to content.js
       },
       () => {
         // After the content script is injected, execute the function
