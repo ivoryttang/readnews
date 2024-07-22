@@ -16,11 +16,12 @@ declare global {
 const CONFIG = {
   API_KEY: "", // Get an API key from https://cartesia.ai/
   API_VERSION: "2024-06-10",
-  API_URL: "https://api.cartesia.ai/tts/bytes",
+  API_URL: "https://api.cartesia.ai/tts/websocket",
   VOICE_ID: "41534e16-2966-4c6b-9670-111411def906",
   MODEL_ID: "sonic-english",
 };
 
+// StreamingAudioPlayer class
 // StreamingAudioPlayer class
 class StreamingAudioPlayer {
   audioContext: AudioContext;
@@ -48,7 +49,7 @@ class StreamingAudioPlayer {
     this.isPlaying = false;
     this.sampleRate = 44100;
     this.channelCount = 1;
-    this.bufferSize = 2 * this.sampleRate; // 2 seconds buffer
+    this.bufferSize = 3 * this.sampleRate; 
     this.currentBuffer = new Float32Array(this.bufferSize);
     this.bufferFillAmount = 0;
     this.remainder = new Uint8Array(0);
@@ -59,7 +60,7 @@ class StreamingAudioPlayer {
     this.onTimeUpdate = () => {};
   }
 
-  async addChunk(chunk: Uint8Array) {
+  async play(chunk: Uint8Array) {
     const combinedChunk = new Uint8Array(this.remainder.length + chunk.length);
     combinedChunk.set(this.remainder);
     combinedChunk.set(chunk, this.remainder.length);
@@ -137,18 +138,10 @@ class StreamingAudioPlayer {
       }
     };
 
-    if (!this.isPlaying) {
-      this.startTime = this.audioContext.currentTime; // Store the start time
-      this.nextStartTime = this.startTime + audioBuffer.duration;
-      this.isPlaying = true;
-      source.start(this.startTime); // Start the source
-    }
-
     if (this.isPlaying) {
       source.start(this.nextStartTime);
       this.nextStartTime += audioBuffer.duration;
     } else {
-      source.start(0);
       this.nextStartTime = this.audioContext.currentTime + audioBuffer.duration;
       this.isPlaying = true;
     }
@@ -269,18 +262,6 @@ class AudioPlayer {
       this.streamingPlayer.togglePlay();
     }
   }
-  
-  // togglePlay(): void {
-  //   if (this.audio.paused) {
-  //     this.audio.play();
-  //     this.playBtn.classList.remove('play');
-  //     this.playBtn.classList.add('pause');
-  //   } else {
-  //     this.audio.pause();
-  //     this.playBtn.classList.remove('pause');
-  //     this.playBtn.classList.add('play');
-  //   }
-  // }
 
   updateProgress(): void {
     const percent = (this.audio.currentTime / this.audio.duration) * 100;
@@ -316,34 +297,43 @@ class AudioPlayer {
 }
 
 async function fetchTTSData(text: string) {
-  const options = {
-    method: "POST",
-    headers: {
-      "X-API-Key": CONFIG.API_KEY,
-      "Cartesia-Version": CONFIG.API_VERSION,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      output_format: {
-        container: "raw",
-        sample_rate: 44100,
-        encoding: "pcm_f32le",
-      },
-      language: "en",
-      voice: {
-        mode: "id",
-        id: CONFIG.VOICE_ID,
-      },
-      model_id: CONFIG.MODEL_ID,
-      transcript: text,
-    })
-  };
-
-  const response = await fetch(CONFIG.API_URL, options);
-  if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
-  }
-  return response;
+  return new Promise<WebSocket>((resolve, reject) => {
+    const ttsWebSocket = new WebSocket(TTS_WEBSOCKET_URL);
+    ttsWebSocket.onopen = () => {
+      console.log('Connected to TTS WebSocket');
+      const textMessage = {
+        'context_id':'happy',
+        'model_id': CONFIG.MODEL_ID,
+        'duration': 180,
+        'transcript': text,
+        'voice': {
+          'mode': "id",
+          'id': CONFIG.VOICE_ID, 
+          "__experimental_controls": {
+            "speed": "normal",
+            "emotion": ["positivity:highest", "curiosity"]
+          }
+        },
+        'output_format': {
+          'container': 'raw',
+          'encoding': 'pcm_f32le',
+          'sample_rate': 44100
+        },
+        "language": "en"
+      };
+      ttsWebSocket.send(JSON.stringify(textMessage));
+      resolve(ttsWebSocket);
+      console.log("tts sent")
+    };
+    ttsWebSocket.onerror = (error) => {
+      console.log(`TTS WebSocket error: ${error}`);
+      reject(error);
+    };
+    ttsWebSocket.onclose = (event) => {
+      console.log(`TTS WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
+      reject(new Error('TTS WebSocket closed unexpectedly'));
+    };
+  });
 }
 
 
@@ -407,6 +397,18 @@ function getMainBodyText() {
   return getText(mainContent);
 }
 
+const TTS_WEBSOCKET_URL = `wss://api.cartesia.ai/tts/websocket?api_key=${CONFIG.API_KEY}&cartesia_version=2024-06-10`;
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = atob(base64); // Decode base64 to a binary string
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i); // Convert binary string to bytes
+  }
+  return bytes;
+}
+
 // Text to Speech function
 async function speakText() {
   const audioPlayerElement = createAudioPlayer() as HTMLElement;
@@ -427,29 +429,50 @@ async function speakText() {
   const allText = getMainBodyText();
   console.log(allText);
     
-  const response = await fetchTTSData(allText);
-  const reader = response.body.getReader();
 
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  const streamingAudioPlayer = new StreamingAudioPlayer(audioContext, () => {
-    audioPlayer.updateProgress();
-  });
+  let audioContext;
+  let streamingAudioPlayer;
 
-  audioPlayer.setStreamingPlayer(streamingAudioPlayer);
-
-  document.body.addEventListener('click', () => {
+  const initAudio = async () => {
+    const response = await fetchTTSData(allText);
+    if (!audioContext) {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      streamingAudioPlayer = new StreamingAudioPlayer(audioContext, () => {
+        audioPlayer.updateProgress();
+      });
+      audioPlayer.setStreamingPlayer(streamingAudioPlayer);
+      console.log("created audio")
+    }
     if (audioContext.state === 'suspended') {
       audioContext.resume();
+      console.log("resume")
     }
-  }, { once: true }); 
+    response.onmessage = async (event) => {
+      console.log("message received");
+      const message = JSON.parse(event.data);
+      
+      if (message.type === "chunk") {
+        if (streamingAudioPlayer) {
+          const audioData = base64ToUint8Array(message.data);
+          await streamingAudioPlayer.play(audioData);
+          // console.log(message.data)
+        }
+      } else if (message.type === "timestamps") {
+        console.log("Received timestamps:", message.word_timestamps);
+      }
+    };
+    response.onclose = async () => {
+      if (streamingAudioPlayer) {
+        await streamingAudioPlayer.finish();
+      }
+    }
+  };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    await streamingAudioPlayer.addChunk(value);
-  }
+  const playButton = audioPlayerElement.querySelector('.toggle-play') as HTMLElement;
+  
+  // Attach the initAudio function to the play button's click event
+  playButton.addEventListener('click', initAudio);
 
-  await streamingAudioPlayer.finish();
 }
 
 
@@ -560,12 +583,6 @@ function injectCSS() {
     cursor: pointer;
   }
   
-  .toggle-play {
-    width: 24px;
-    height: 24px;
-    background: url('play-icon.png') no-repeat center;
-    background-size: contain;
-  }
   
   .toggle-play:before {
     content: '\\25B6'; // Unicode character for a right-pointing triangle (play symbol)
