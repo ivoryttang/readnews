@@ -1,5 +1,7 @@
 export {}
 import type { PlasmoCSConfig } from "plasmo"
+import { WebPlayer } from "@cartesia/cartesia-js";
+import Cartesia from "@cartesia/cartesia-js";
  
 export const config: PlasmoCSConfig = {
   matches: ["<all_urls>"],
@@ -21,370 +23,51 @@ const CONFIG = {
   MODEL_ID: "sonic-english",
 };
 
-// StreamingAudioPlayer class
-class StreamingAudioPlayer {
-  audioContext: AudioContext;
-  onProgress: (time: number) => void;
-  bufferQueue: any[];
-  isPlaying: boolean;
-  sampleRate: number;
-  channelCount: number;
-  bufferSize: number;
-  currentBuffer: Float32Array;
-  bufferFillAmount: number;
-  totalDuration: number; // set once to audio duration
-  remainder: Uint8Array;
-  nextStartTime: number;
-  startTime: number | null; // current time
-  onPlaybackStart: () => void;
-  onPlaybackPause: () => void;
-  onPlaybackEnd: () => void;
-  onTimeUpdate: (currentTime: number, duration: number) => void;
-  isLengthSet: boolean;
-
-  constructor(audioContext: AudioContext, duration: number, onProgress: (time: number) => void) {
-    this.audioContext = audioContext;
-    this.onProgress = onProgress;
-    this.totalDuration = duration;
-    this.bufferQueue = [];
-    this.startTime = 0; 
-    this.isPlaying = false;
-    this.sampleRate = 44100;
-    this.channelCount = 1;
-    this.bufferSize = 2.9 * this.sampleRate; 
-    this.currentBuffer = new Float32Array(this.bufferSize);
-    this.bufferFillAmount = 0;
-    this.remainder = new Uint8Array(0);
-    this.nextStartTime = 0;
-    this.onPlaybackStart = () => {};
-    this.onPlaybackPause = () => {};
-    this.onPlaybackEnd = () => {};
-    this.onTimeUpdate = () => {};
-    this.isLengthSet = false;
-  }
-
-  async play(chunk: Uint8Array) {
-    const combinedChunk = new Uint8Array(this.remainder.length + chunk.length);
-    combinedChunk.set(this.remainder);
-    combinedChunk.set(chunk, this.remainder.length);
-
-    const alignedLength = Math.floor(combinedChunk.length / 4) * 4;
-    const newSamples = new Float32Array(
-      combinedChunk.buffer,
-      0,
-      alignedLength / 4
-    );
-    this.startTime = newSamples.length / this.sampleRate;
-
-    this.remainder = combinedChunk.slice(alignedLength);
-
-    if (this.bufferFillAmount + newSamples.length > this.bufferSize) {
-      if (this.bufferFillAmount > 0) {
-        this.playBuffer();
-      }
-      this.bufferFillAmount = 0;
-    }
-
-    this.currentBuffer.set(newSamples, this.bufferFillAmount);
-    this.bufferFillAmount += newSamples.length;
-
-    if (this.bufferFillAmount >= this.bufferSize / 2) {
-      this.playBuffer();
-      this.bufferFillAmount = 0;
-    }
-  }
-
-  playBuffer() {
-    const audioBuffer = this.audioContext.createBuffer(
-      this.channelCount,
-      this.bufferFillAmount,
-      this.sampleRate
-    );
-    audioBuffer.copyToChannel(
-      this.currentBuffer.slice(0, this.bufferFillAmount),
-      0
-    );
-
-    
-    // Call the onProgress callback with the current playback position
-    if (this.onProgress) {
-      this.onProgress(this.nextStartTime);
-    }
-
-    const source = this.audioContext.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this.audioContext.destination);
-
-    if (this.isPlaying) {
-      this.startTime = this.nextStartTime; // Store the start time
-      this.nextStartTime += audioBuffer.duration;
-    } 
-    
-    if (!this.isPlaying) {
-      this.startTime = this.audioContext.currentTime;
-      this.isPlaying = true;
-      this.onPlaybackStart();
-    }
-
-    // Call onTimeUpdate every 100ms during playback
-    const updateInterval = setInterval(() => {
-      if (this.isPlaying && this.startTime !== null) {
-        const currentTime = this.audioContext.currentTime - this.startTime;
-        this.onTimeUpdate(currentTime, this.totalDuration);
-      } else {
-        clearInterval(updateInterval);
-      }
-    }, 100);
-
-    
-
-    source.onended = () => {
-      clearInterval(updateInterval);
-      if (this.bufferQueue.length === 0 && this.bufferFillAmount === 0) {
-        this.isPlaying = false;
-        this.onPlaybackEnd();
-      }
-    };
-
-    if (this.isPlaying) {
-      source.start(this.nextStartTime);
-      this.nextStartTime += audioBuffer.duration;
-    } else {
-      this.nextStartTime = this.audioContext.currentTime + audioBuffer.duration;
-      this.startTime = this.audioContext.currentTime;
-      this.isPlaying = true;
-    }
-  }
-
-  togglePlay() {
-    if (this.isPlaying) {
-      this.audioContext.suspend();
-      this.isPlaying = false;
-      this.onPlaybackPause();
-    } else {
-      this.audioContext.resume();
-      this.isPlaying = true;
-      this.startTime = this.audioContext.currentTime;
-      this.onPlaybackStart();
-    }
-  }
-
-  async finish() {
-    this.isLengthSet = true;
-    if (this.bufferFillAmount > 0 || this.remainder.length > 0) {
-      if (this.remainder.length > 0) {
-        const paddedRemainder = new Uint8Array(
-          Math.ceil(this.remainder.length / 4) * 4
-        );
-        paddedRemainder.set(this.remainder);
-        const finalSamples = new Float32Array(paddedRemainder.buffer);
-        this.currentBuffer.set(finalSamples, this.bufferFillAmount);
-        this.bufferFillAmount += finalSamples.length;
-      }
-      this.playBuffer();
-    }
-    await new Promise((resolve) =>
-      setTimeout(resolve, this.nextStartTime * 1000)
-    );
-  }
-}
-
-class AudioPlayer {
-  streamingPlayer: StreamingAudioPlayer;
-  currentAudioTime: number;
-  player: HTMLElement;
-  audio: HTMLAudioElement;
-  progress: HTMLElement;
-  currentTime: HTMLElement;
-  totalTime: HTMLElement;
-  playBtn: HTMLElement;
-  volumeBtn: HTMLElement;
-  volumeSlider: HTMLElement;
-  volumePercentage: HTMLElement;
-  timerInterval: number | null;
-
-  constructor(player: HTMLElement) {
-    this.player = player;
-    this.audio = new Audio();
-    this.streamingPlayer = null;
-    this.progress = player.querySelector('.progress') as HTMLElement;
-    this.currentTime = player.querySelector('.current') as HTMLElement;
-    this.totalTime = player.querySelector('.length') as HTMLElement;
-    this.playBtn = player.querySelector('.toggle-play') as HTMLElement;
-    this.volumeBtn = player.querySelector('.volume-button') as HTMLElement;
-    this.volumeSlider = player.querySelector('.volume-slider') as HTMLElement;
-    this.volumePercentage = player.querySelector('.volume-percentage') as HTMLElement;
-    this.currentAudioTime = 0;
-    this.timerInterval = null;
-
-    this.initEventListeners();
-  }
-
-  initEventListeners(): void {
-    this.playBtn.addEventListener('click', () => this.togglePlay());
-    this.audio.addEventListener('timeupdate', () => this.updateProgress());
-    this.audio.addEventListener('loadeddata', () => this.setTotalTime());
-    this.volumeBtn.addEventListener('click', () => this.toggleMute());
-    this.volumeSlider.addEventListener('click', (e) => this.changeVolume(e));
-    const selectElement = this.player.querySelector('.audio-options') as HTMLSelectElement;
-    selectElement.addEventListener('change', (e) => this.changeVoice(e));
-  }
-
-  changeVoice(e: Event): void {
-    const selectElement = e.target as HTMLSelectElement;
-    const selectedValue = selectElement.value;
-    const randomIndex = Math.floor(Math.random() * 5);
-    const voiceIds = ["b7d50908-b17c-442d-ad8d-810c63997ed9", "2ee87190-8f84-4925-97da-e52547f9462c", "fb26447f-308b-471e-8b00-8e9f04284eb5","e00d0e4c-a5c8-443f-a8a3-473eb9a62355","638efaaa-4d0c-442e-b701-3fae16aad012"]
-    switch (selectedValue) {
-      case "woman":
-        CONFIG.VOICE_ID = "79a125e8-cd45-4c13-8a67-188112f4dd22";
-        break;
-      case "man":
-        CONFIG.VOICE_ID = "41534e16-2966-4c6b-9670-111411def906";
-        break;
-      case "other":
-        CONFIG.VOICE_ID = voiceIds[randomIndex];;
-        break;
-      default:
-        CONFIG.VOICE_ID = "default-voice-id";
-    }
-  }
-
-  setStreamingPlayer(streamingPlayer: StreamingAudioPlayer) {
-    this.streamingPlayer = streamingPlayer;
-    this.streamingPlayer.onTimeUpdate = (currentTime, duration) => {
-      const actualCurrentTime = Math.max(0, currentTime - this.streamingPlayer.startTime);
-      const percent = (actualCurrentTime / duration) * 100;
-      this.progress.style.width = `${percent}%`;
-      this.currentTime.textContent = this.formatTime(actualCurrentTime);
-      this.totalTime.textContent = this.formatTime(duration);
-    };
-
-    this.streamingPlayer.onPlaybackStart = () => {
-      this.playBtn.classList.remove('play');
-      this.playBtn.classList.add('pause');
-      this.startTimer();
-    };
-
-    this.streamingPlayer.onPlaybackPause = () => {
-      this.playBtn.classList.remove('pause');
-      this.playBtn.classList.add('play');
-      this.stopTimer();
-    };
-
-    this.streamingPlayer.onPlaybackEnd = () => {
-      this.playBtn.classList.remove('pause');
-      this.playBtn.classList.add('play');
-      this.stopTimer();
-    };
-  }
-  startTimer() {
-    if (this.timerInterval === null) {
-      this.timerInterval = window.setInterval(() => this.updateTimer(), 100);
-    }
-  }
-
-  stopTimer() {
-    if (this.timerInterval !== null) {
-      window.clearInterval(this.timerInterval);
-      this.timerInterval = null;
-    }
-  }
-  // Add a method to update the timer
-  updateTimer() {
-    if (this.streamingPlayer && this.streamingPlayer.isPlaying) {
-      const currentTime = this.currentAudioTime - this.streamingPlayer.startTime;
-      const duration = this.streamingPlayer.totalDuration;
-      const percent = (currentTime / duration) * 100;
-      this.progress.style.width = `${percent}%`;
-      this.currentTime.textContent = this.formatTime(Math.max(0, currentTime));
-      this.totalTime.textContent = this.formatTime(duration);
-    }
-  }
-
-  togglePlay(): void {
-    if (this.streamingPlayer) {
-      this.streamingPlayer.togglePlay();
-      if (this.streamingPlayer.isPlaying) {
-        this.startTimer();
-      } else {
-        this.stopTimer();
-      }
-    }
-  }
-
-
-  updateProgress(): void {
-    const percent = (this.currentAudioTime / this.audio.duration) * 100;
-    this.progress.style.width = `${percent}%`;
-    this.currentTime.textContent = this.formatTime(this.currentAudioTime);
-  }
-
-  setTotalTime(): void {
-    this.totalTime.textContent = this.formatTime(this.streamingPlayer.totalDuration);
-  }
-
-  formatTime(time: number): string {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-  }
-
-  toggleMute(): void {
-    this.audio.muted = !this.audio.muted;
-    this.volumeBtn.classList.toggle('mute');
-  }
-
-  changeVolume(e: MouseEvent): void {
-    const sliderWidth = window.getComputedStyle(this.volumeSlider).width;
-    const newVolume = e.offsetX / parseInt(sliderWidth);
-    this.audio.volume = newVolume;
-    this.volumePercentage.style.width = `${newVolume * 100}%`;
-  }
-
-  setAudioSource(url: string): void {
-    this.audio.src = url;
-  }
-}
-
+const cartesia = new Cartesia({
+	apiKey: CONFIG.API_KEY,
+});
 async function fetchTTSData(text: string) {
-  return new Promise<WebSocket>((resolve, reject) => {
-    const ttsWebSocket = new WebSocket(TTS_WEBSOCKET_URL);
-    ttsWebSocket.onopen = () => {
-      console.log('Connected to TTS WebSocket');
-      const textMessage = {
-        'context_id':'happy',
-        'model_id': CONFIG.MODEL_ID,
-        'duration': 180,
-        'transcript': text,
-        'voice': {
-          'mode': "id",
-          'id': CONFIG.VOICE_ID, 
-          "__experimental_controls": {
-            "speed": "normal",
-            "emotion": ["positivity:highest", "curiosity"]
-          }
-        },
-        'output_format': {
-          'container': 'raw',
-          'encoding': 'pcm_f32le',
-          'sample_rate': 44100
-        },
-        "language": "en"
-      };
-      ttsWebSocket.send(JSON.stringify(textMessage));
-      resolve(ttsWebSocket);
-      console.log("tts sent")
-    };
-    ttsWebSocket.onerror = (error) => {
-      console.log(`TTS WebSocket error: ${error}`);
-      reject(error);
-    };
-    ttsWebSocket.onclose = (event) => {
-      console.log(`TTS WebSocket closed. Code: ${event.code}, Reason: ${event.reason}`);
-      reject(new Error('TTS WebSocket closed unexpectedly'));
-    };
+  const ttsWebSocket = cartesia.tts.websocket({container: "raw",
+    encoding: "pcm_f32le",
+    sampleRate: 44100
   });
+  try {
+    await ttsWebSocket.connect();
+  } catch (error) {
+    console.error(`Failed to connect to Cartesia: ${error}`);
+  }
+  
+  console.log('Connected to TTS WebSocket');
+  
+  const response = await ttsWebSocket.send(
+    {
+      'context_id':'happy',
+      'model_id': CONFIG.MODEL_ID,
+      'duration': 180,
+      'transcript': text,
+      'voice': {
+        'mode': "id",
+        'id': CONFIG.VOICE_ID, 
+        "__experimental_controls": {
+          "speed": "normal",
+          "emotion": ["positivity:highest", "curiosity"]
+        }
+      },
+      'output_format': {
+        'container': 'raw',
+        'encoding': 'pcm_f32le',
+        'sample_rate': 44100
+      },
+      "language": "en"
+    }
+  );
+     
+  // Create a Player object.
+  const player = new WebPlayer({bufferDuration:3});
+
+  // Play the audio. (`response` includes a custom Source object that the Player can play.)
+  // The call resolves when the audio finishes playing.
+  await player.play(response.source);
 }
 
 
@@ -474,51 +157,12 @@ async function speakText() {
   } else {
     injectCSS();
   }
-  
-  const audioPlayer = new AudioPlayer(audioPlayerElement);
 
   const allText = getMainBodyText();
   console.log(allText);
     
-
-  let audioContext;
-  let streamingAudioPlayer;
-
   const initAudio = async () => {
-    const response = await fetchTTSData(allText);
-    //calc total time from allText length
-    const totalDuration = allText.length / 10; //slight hack because can't get true duration since it's loaded in chunks
-    if (!audioContext) {
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      streamingAudioPlayer = new StreamingAudioPlayer(audioContext, totalDuration, () => {
-        audioPlayer.updateProgress();
-      });
-      audioPlayer.setStreamingPlayer(streamingAudioPlayer);
-      console.log("created audio")
-    }
-    if (audioContext.state === 'suspended') {
-      audioContext.resume();
-      console.log("resume")
-    }
-    response.onmessage = async (event) => {
-      console.log("message received");
-      const message = JSON.parse(event.data);
-      
-      if (message.type === "chunk") {
-        if (streamingAudioPlayer) {
-          const audioData = base64ToUint8Array(message.data);
-          await streamingAudioPlayer.play(audioData);
-          console.log(message.data)
-        }
-      } else if (message.type === "timestamps") {
-        console.log("Received timestamps:", message.word_timestamps);
-      }
-    };
-    response.onclose = async () => {
-      if (streamingAudioPlayer) {
-        await streamingAudioPlayer.finish();
-      }
-    }
+    await fetchTTSData(allText);
   };
 
   const playButton = audioPlayerElement.querySelector('.toggle-play') as HTMLElement;
