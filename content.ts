@@ -17,11 +17,10 @@ const CONFIG = {
   API_KEY: "", // Get an API key from https://cartesia.ai/
   API_VERSION: "2024-06-10",
   API_URL: "https://api.cartesia.ai/tts/websocket",
-  VOICE_ID: "41534e16-2966-4c6b-9670-111411def906",
+  VOICE_ID: "79a125e8-cd45-4c13-8a67-188112f4dd22",
   MODEL_ID: "sonic-english",
 };
 
-// StreamingAudioPlayer class
 // StreamingAudioPlayer class
 class StreamingAudioPlayer {
   audioContext: AudioContext;
@@ -33,23 +32,26 @@ class StreamingAudioPlayer {
   bufferSize: number;
   currentBuffer: Float32Array;
   bufferFillAmount: number;
+  totalDuration: number; // set once to audio duration
   remainder: Uint8Array;
   nextStartTime: number;
-  startTime: number | null;
+  startTime: number | null; // current time
   onPlaybackStart: () => void;
   onPlaybackPause: () => void;
   onPlaybackEnd: () => void;
   onTimeUpdate: (currentTime: number, duration: number) => void;
+  isLengthSet: boolean;
 
-  constructor(audioContext: AudioContext, onProgress: (time: number) => void) {
+  constructor(audioContext: AudioContext, duration: number, onProgress: (time: number) => void) {
     this.audioContext = audioContext;
     this.onProgress = onProgress;
+    this.totalDuration = duration;
     this.bufferQueue = [];
-    this.startTime = null; 
+    this.startTime = 0; 
     this.isPlaying = false;
     this.sampleRate = 44100;
     this.channelCount = 1;
-    this.bufferSize = 3 * this.sampleRate; 
+    this.bufferSize = 2.9 * this.sampleRate; 
     this.currentBuffer = new Float32Array(this.bufferSize);
     this.bufferFillAmount = 0;
     this.remainder = new Uint8Array(0);
@@ -58,6 +60,7 @@ class StreamingAudioPlayer {
     this.onPlaybackPause = () => {};
     this.onPlaybackEnd = () => {};
     this.onTimeUpdate = () => {};
+    this.isLengthSet = false;
   }
 
   async play(chunk: Uint8Array) {
@@ -71,6 +74,7 @@ class StreamingAudioPlayer {
       0,
       alignedLength / 4
     );
+    this.startTime = newSamples.length / this.sampleRate;
 
     this.remainder = combinedChunk.slice(alignedLength);
 
@@ -114,21 +118,25 @@ class StreamingAudioPlayer {
     if (this.isPlaying) {
       this.startTime = this.nextStartTime; // Store the start time
       this.nextStartTime += audioBuffer.duration;
-    } else {
-      this.startTime = this.audioContext.currentTime; // Store the start time
-      this.nextStartTime = this.startTime + audioBuffer.duration;
+    } 
+    
+    if (!this.isPlaying) {
+      this.startTime = this.audioContext.currentTime;
       this.isPlaying = true;
+      this.onPlaybackStart();
     }
 
     // Call onTimeUpdate every 100ms during playback
     const updateInterval = setInterval(() => {
       if (this.isPlaying && this.startTime !== null) {
         const currentTime = this.audioContext.currentTime - this.startTime;
-        this.onTimeUpdate(currentTime, this.nextStartTime);
+        this.onTimeUpdate(currentTime, this.totalDuration);
       } else {
         clearInterval(updateInterval);
       }
     }, 100);
+
+    
 
     source.onended = () => {
       clearInterval(updateInterval);
@@ -143,6 +151,7 @@ class StreamingAudioPlayer {
       this.nextStartTime += audioBuffer.duration;
     } else {
       this.nextStartTime = this.audioContext.currentTime + audioBuffer.duration;
+      this.startTime = this.audioContext.currentTime;
       this.isPlaying = true;
     }
   }
@@ -155,11 +164,13 @@ class StreamingAudioPlayer {
     } else {
       this.audioContext.resume();
       this.isPlaying = true;
+      this.startTime = this.audioContext.currentTime;
       this.onPlaybackStart();
     }
   }
 
   async finish() {
+    this.isLengthSet = true;
     if (this.bufferFillAmount > 0 || this.remainder.length > 0) {
       if (this.remainder.length > 0) {
         const paddedRemainder = new Uint8Array(
@@ -180,6 +191,7 @@ class StreamingAudioPlayer {
 
 class AudioPlayer {
   streamingPlayer: StreamingAudioPlayer;
+  currentAudioTime: number;
   player: HTMLElement;
   audio: HTMLAudioElement;
   progress: HTMLElement;
@@ -189,6 +201,7 @@ class AudioPlayer {
   volumeBtn: HTMLElement;
   volumeSlider: HTMLElement;
   volumePercentage: HTMLElement;
+  timerInterval: number | null;
 
   constructor(player: HTMLElement) {
     this.player = player;
@@ -201,6 +214,8 @@ class AudioPlayer {
     this.volumeBtn = player.querySelector('.volume-button') as HTMLElement;
     this.volumeSlider = player.querySelector('.volume-slider') as HTMLElement;
     this.volumePercentage = player.querySelector('.volume-percentage') as HTMLElement;
+    this.currentAudioTime = 0;
+    this.timerInterval = null;
 
     this.initEventListeners();
   }
@@ -237,40 +252,76 @@ class AudioPlayer {
 
   setStreamingPlayer(streamingPlayer: StreamingAudioPlayer) {
     this.streamingPlayer = streamingPlayer;
+    this.streamingPlayer.onTimeUpdate = (currentTime, duration) => {
+      const actualCurrentTime = Math.max(0, currentTime - this.streamingPlayer.startTime);
+      const percent = (actualCurrentTime / duration) * 100;
+      this.progress.style.width = `${percent}%`;
+      this.currentTime.textContent = this.formatTime(actualCurrentTime);
+      this.totalTime.textContent = this.formatTime(duration);
+    };
+
     this.streamingPlayer.onPlaybackStart = () => {
       this.playBtn.classList.remove('play');
       this.playBtn.classList.add('pause');
+      this.startTimer();
     };
+
     this.streamingPlayer.onPlaybackPause = () => {
       this.playBtn.classList.remove('pause');
       this.playBtn.classList.add('play');
+      this.stopTimer();
     };
+
     this.streamingPlayer.onPlaybackEnd = () => {
       this.playBtn.classList.remove('pause');
       this.playBtn.classList.add('play');
+      this.stopTimer();
     };
-    this.streamingPlayer.onTimeUpdate = (currentTime, duration) => {
+  }
+  startTimer() {
+    if (this.timerInterval === null) {
+      this.timerInterval = window.setInterval(() => this.updateTimer(), 100);
+    }
+  }
+
+  stopTimer() {
+    if (this.timerInterval !== null) {
+      window.clearInterval(this.timerInterval);
+      this.timerInterval = null;
+    }
+  }
+  // Add a method to update the timer
+  updateTimer() {
+    if (this.streamingPlayer && this.streamingPlayer.isPlaying) {
+      const currentTime = this.currentAudioTime - this.streamingPlayer.startTime;
+      const duration = this.streamingPlayer.totalDuration;
       const percent = (currentTime / duration) * 100;
       this.progress.style.width = `${percent}%`;
-      this.currentTime.textContent = this.formatTime(currentTime);
+      this.currentTime.textContent = this.formatTime(Math.max(0, currentTime));
       this.totalTime.textContent = this.formatTime(duration);
-    };
+    }
   }
 
   togglePlay(): void {
     if (this.streamingPlayer) {
       this.streamingPlayer.togglePlay();
+      if (this.streamingPlayer.isPlaying) {
+        this.startTimer();
+      } else {
+        this.stopTimer();
+      }
     }
   }
 
+
   updateProgress(): void {
-    const percent = (this.audio.currentTime / this.audio.duration) * 100;
+    const percent = (this.currentAudioTime / this.audio.duration) * 100;
     this.progress.style.width = `${percent}%`;
-    this.currentTime.textContent = this.formatTime(this.audio.currentTime);
+    this.currentTime.textContent = this.formatTime(this.currentAudioTime);
   }
 
   setTotalTime(): void {
-    this.totalTime.textContent = this.formatTime(this.audio.duration);
+    this.totalTime.textContent = this.formatTime(this.streamingPlayer.totalDuration);
   }
 
   formatTime(time: number): string {
@@ -435,9 +486,11 @@ async function speakText() {
 
   const initAudio = async () => {
     const response = await fetchTTSData(allText);
+    //calc total time from allText length
+    const totalDuration = allText.length / 10; //slight hack because can't get true duration since it's loaded in chunks
     if (!audioContext) {
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      streamingAudioPlayer = new StreamingAudioPlayer(audioContext, () => {
+      streamingAudioPlayer = new StreamingAudioPlayer(audioContext, totalDuration, () => {
         audioPlayer.updateProgress();
       });
       audioPlayer.setStreamingPlayer(streamingAudioPlayer);
@@ -455,7 +508,7 @@ async function speakText() {
         if (streamingAudioPlayer) {
           const audioData = base64ToUint8Array(message.data);
           await streamingAudioPlayer.play(audioData);
-          // console.log(message.data)
+          console.log(message.data)
         }
       } else if (message.type === "timestamps") {
         console.log("Received timestamps:", message.word_timestamps);
@@ -495,7 +548,7 @@ function createAudioPlayer() {
       <div class="time">
         <div class="current">0:00</div>
         <div class="divider">/</div>
-        <div class="length">3:45</div>
+        <div class="length">0:00</div>
       </div>
     </div>
     <div class="audio-controls">
