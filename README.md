@@ -37,5 +37,5 @@ pnpm build
 npm run build
 ```
 
-This should create a production bundle for your extension, ready to be zipped and published to the stores. Go to chrome://extensions, click load unpacked, then go to build/chrome-mv3-dev to unpack. It should show up in your dashboard, and the little video player should popup on any allowed new site.
+This should create a production bundle for your extension, ready to be zipped and published to the stores. Go to chrome://extensions, click load unpacked, then go to build/chrome-mv3-dev to unpack. It should show up in your dashboard, and the little video player should popup on any allowed news site.
 
