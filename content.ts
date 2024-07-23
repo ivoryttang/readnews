@@ -8,12 +8,6 @@ export const config: PlasmoCSConfig = {
   world: "MAIN"
 }
 
-declare global {
-  interface Window {
-    webkitAudioContext: typeof AudioContext;
-  }
-}
-
 // Configuration
 const CONFIG = {
   API_KEY: "", // Get an API key from https://cartesia.ai/
@@ -26,21 +20,31 @@ const CONFIG = {
 const cartesia = new Cartesia({
 	apiKey: CONFIG.API_KEY,
 });
-async function fetchTTSData(text: string) {
-  const ttsWebSocket = cartesia.tts.websocket({container: "raw",
+// Create a Player object.
+const player = new WebPlayer({bufferDuration:3});
+var total_duration = 0;
+var isPlaying = false;
+var isPaused = false;
+const ttsWebSocket = cartesia.tts.websocket({container: "raw",
     encoding: "pcm_f32le",
     sampleRate: 44100
   });
-  try {
-    await ttsWebSocket.connect();
-  } catch (error) {
-    console.error(`Failed to connect to Cartesia: ${error}`);
-  }
   
-  console.log('Connected to TTS WebSocket');
-  
-  const response = await ttsWebSocket.send(
-    {
+
+var audioSource = null
+let wordTimestamps: { words: any; start: number[]; end: number[] } | null = null;
+
+async function fetchTTSData(text: string) {
+  if (!audioSource) {
+    try {
+      await ttsWebSocket.connect();
+    } catch (error) {
+      console.error(`Failed to connect to Cartesia: ${error}`);
+      return;
+    }
+    console.log('Connected to TTS WebSocket');
+    
+    const response = await ttsWebSocket.send({
       'context_id':'happy',
       'model_id': CONFIG.MODEL_ID,
       'duration': 180,
@@ -58,16 +62,25 @@ async function fetchTTSData(text: string) {
         'encoding': 'pcm_f32le',
         'sample_rate': 44100
       },
-      "language": "en"
-    }
-  );
-     
-  // Create a Player object.
-  const player = new WebPlayer({bufferDuration:3});
+      "language": "en",
+      "add_timestamps":true
+    });
 
-  // Play the audio. (`response` includes a custom Source object that the Player can play.)
-  // The call resolves when the audio finishes playing.
-  await player.play(response.source);
+    audioSource = response.source;
+
+    response.on("timestamps", (timestamps) => {
+      wordTimestamps = {
+        words: timestamps.words,
+        start: timestamps.start, // Now correctly typed as number[]
+        end: timestamps.end
+      };
+    });
+  }
+
+}
+
+function getWordTimestamps() {
+  return wordTimestamps;
 }
 
 
@@ -131,20 +144,9 @@ function getMainBodyText() {
   return getText(mainContent);
 }
 
-const TTS_WEBSOCKET_URL = `wss://api.cartesia.ai/tts/websocket?api_key=${CONFIG.API_KEY}&cartesia_version=2024-06-10`;
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binaryString = atob(base64); // Decode base64 to a binary string
-  const len = binaryString.length;
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    bytes[i] = binaryString.charCodeAt(i); // Convert binary string to bytes
-  }
-  return bytes;
-}
-
 // Text to Speech function
 async function speakText() {
+  // audio UI
   const audioPlayerElement = createAudioPlayer() as HTMLElement;
   if (document.body.firstChild) {
     document.body.insertBefore(audioPlayerElement, document.body.firstChild);
@@ -158,18 +160,124 @@ async function speakText() {
     injectCSS();
   }
 
-  const allText = getMainBodyText();
-  console.log(allText);
-    
-  const initAudio = async () => {
-    await fetchTTSData(allText);
-  };
-
   const playButton = audioPlayerElement.querySelector('.toggle-play') as HTMLElement;
-  
-  // Attach the initAudio function to the play button's click event
-  playButton.addEventListener('click', initAudio);
+  playButton.addEventListener('click', togglePlayPause);
 
+  const selectVoiceButton = audioPlayerElement.querySelector('.audio-options') as HTMLElement;
+  selectVoiceButton.addEventListener('click', toggleVoice);
+}
+
+// Function to format time in minutes:seconds
+function formatTime(seconds) {
+  const pad = (num, size) => ('000' + num).slice(size * -1);
+  let time = parseFloat(seconds.toFixed(3));
+  let hours = Math.floor(time / 60 / 60);
+  let minutes = Math.floor(time / 60) % 60;
+  let secs = Math.floor(time - minutes * 60);
+  return pad(minutes, 2) + ':' + pad(secs, 2);
+}
+
+// Function to update the timeline and time display
+function updatePlayerUI() {
+  const timestamps = getWordTimestamps();
+  const currentTime = timestamps ? timestamps.start[0] : 0;
+
+  // Update the current time display
+  const currentTimeDisplay = document.querySelector('.audio-player .current');
+  if (currentTimeDisplay) {
+    currentTimeDisplay.textContent = formatTime(currentTime);
+  }
+
+  // Update the duration display
+  const durationDisplay = document.querySelector('.audio-player .length');
+  if (durationDisplay) {
+    durationDisplay.textContent = formatTime(total_duration);
+  }
+
+  // Update the progress bar
+  const progress = document.querySelector('.audio-player .progress') as HTMLElement;
+  if (progress && total_duration > 0) {
+    const percentage = (currentTime / total_duration) * 100;
+    progress.style.width = `${percentage}%`;
+  }
+}
+
+let updateUIIntervalId;
+// Call this function to start updating the UI
+function startUpdatingPlayerUI() {
+  const updateInterval = 1000; // Update every second
+  // Clear any existing intervals to avoid multiple intervals running
+  clearInterval(updateUIIntervalId);
+  // Set the interval and store the interval ID
+  updateUIIntervalId = setInterval(updatePlayerUI, updateInterval);
+}
+
+function stopUpdatingPlayerUI() {
+  // Clear the interval using the stored interval ID
+  clearInterval(updateUIIntervalId);
+}
+
+async function toggleVoice() {
+  const selectVoiceButton = document.querySelector('.audio-options') as HTMLSelectElement;
+  selectVoiceButton.addEventListener('change', (event) => {
+    const selectedVoiceId = (event.target as HTMLSelectElement).value;
+    const randomIndex = Math.floor(Math.random() * 5);
+    const voiceIds = ["b7d50908-b17c-442d-ad8d-810c63997ed9", "2ee87190-8f84-4925-97da-e52547f9462c", "fb26447f-308b-471e-8b00-8e9f04284eb5","e00d0e4c-a5c8-443f-a8a3-473eb9a62355","638efaaa-4d0c-442e-b701-3fae16aad012"]
+    switch (selectedVoiceId) {
+      case "woman":
+        CONFIG.VOICE_ID = "79a125e8-cd45-4c13-8a67-188112f4dd22";
+        break;
+      case "man":
+        CONFIG.VOICE_ID = "41534e16-2966-4c6b-9670-111411def906";
+        break;
+      case "other":
+        CONFIG.VOICE_ID = voiceIds[randomIndex];;
+        break;
+      default:
+        CONFIG.VOICE_ID = "default-voice-id";
+    }
+  });
+}
+
+async function togglePlayPause() {
+  const playButton = document.querySelector('.toggle-play');
+
+  if (!audioSource) {
+    // First time play is clicked, generate audio
+    playButton.classList.remove('play');
+    playButton.classList.add('pause');
+    const allText = getMainBodyText();
+    startUpdatingPlayerUI();
+    total_duration = allText.length/10;
+    await fetchTTSData(allText);
+    if (!audioSource) {
+      console.error('Failed to generate audio source');
+      return;
+    }
+    await player.play(audioSource);
+  }
+  else {
+    if (isPlaying) { // pause if already playing
+      await player.pause();
+      isPaused = true
+      isPlaying = false;
+      playButton.classList.remove('pause');
+      playButton.classList.add('play');
+      stopUpdatingPlayerUI();
+    } else {
+        // Call startUpdatingPlayerUI when you want to start updating the UI, e.g., when audio starts playing
+      startUpdatingPlayerUI();
+      if (isPaused) { // resume if paused
+        await player.resume();
+        isPaused = false
+      } else { // play from start
+        await player.play(audioSource);
+      }
+      isPlaying = true;
+      playButton.classList.remove('play');
+      playButton.classList.add('pause');
+    }
+  }
 }
 
 
@@ -219,7 +327,6 @@ function createAudioPlayer() {
 }
 
 function injectCSS() {
-  console.log("Injecting CSS");
   const style = document.createElement('style');
   style.textContent = `
 
@@ -413,7 +520,6 @@ function injectCSS() {
   
   `
   document.head.appendChild(style);
-  console.log("finish css injection")
 }
 
 speakText();
