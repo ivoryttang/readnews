@@ -6,13 +6,11 @@ It can:
 
 → Read entire article out loud using [Cartesia](https://cartesia.ai/)'s text-to-speech api (**Cmd+Shift+S**) 
 
-→ Jump to certain passages (**Cmd+Shift+E**)
-
-→ Change voices
+→ Change voices (American Man, Bristish Woman, or pick a surprise voice!)
 
 ## Configuration
 
-Before running the extension, you need to get an API key from [Cartesia](https://cartesia.ai/) and set it in your .env file.
+Before running the extension, you need to get an API key from [Cartesia](https://cartesia.ai/) and set it in the content.ts file in CONFIG.
 
 
 ## Getting Started
@@ -39,5 +37,5 @@ pnpm build
 npm run build
 ```
 
-This should create a production bundle for your extension, ready to be zipped and published to the stores.
+This should create a production bundle for your extension, ready to be zipped and published to the stores. Go to chrome://extensions, click load unpacked, then go to build/chrome-mv3-dev to unpack. It should show up in your dashboard, and the little video player should popup on any allowed new site.
 
